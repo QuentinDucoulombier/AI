@@ -41,6 +41,8 @@ turn_ended = False
 max_selected_counts = {}
 initial_counts = {}  # Store initial counts for each label
 
+game_over = False
+
 def draw_player_turn_button(screen, button_text, message=""):
     """Draws a turn indicator button at the top right of the screen."""
     screen_width, screen_height = screen.get_size()
@@ -84,7 +86,6 @@ def draw_hexagon(surface, x, y, size, border_color, fill_color, number=None, bor
         text_rect = text_surface.get_rect(center=(x, y))
         surface.blit(text_surface, text_rect)
 
-
 def point_in_hex(x, y, hex_x, hex_y, size):
     """Check if the point (x, y) is inside the hexagon centered at (hex_x, hex_y)."""
     dx = abs(x - hex_x)
@@ -126,14 +127,14 @@ def draw_hex_shape_grid(surface, center_row, center_col, size):
                 y = HEIGHT / 2 + row * ((size + HEX_BORDER) * 1.5)
                 label = get_hex_label(row, col, max_dist)
                 
-                # hexagon_board[(row, col)] = {'x': x, 'y': y, 'label': label, 'selected': False} 
                 hexagon_board[(row, col)] = {
-                                                'x': x,
-                                                'y': y,
-                                                'label': label,
-                                                'selected': False,
-                                                'owner': None  # Track which player has selected the hexagon
-                                            }
+                    'x': x,
+                    'y': y,
+                    'label': label,
+                    'selected': False,
+                    'booked': False,  # Ensure 'booked' key is initialized
+                    'owner': None  # Track which player has selected the hexagon
+                }
                 
                 initial_counts[label] = initial_counts.get(label, 0) + 1
 
@@ -259,7 +260,7 @@ def auto_select_remaining_hexes(label, required_selections):
     print(f"AI selected {number_to_select} hexes automatically due to timeout.")     
 
 def Count_Hexagons_by_Owner():
-    owner_count = {'None': 0, 'white': 0, 'black': 0}
+    owner_count = {'None': 0, 'white': 50, 'black': 41}
     for hex_info in hexagon_board.values():
         owner = hex_info['owner']
         if owner is None:
@@ -269,10 +270,22 @@ def Count_Hexagons_by_Owner():
     
     print(owner_count)
 
+def display_final_scores():
+    """Displays the final scores of both players."""
+    black_score = sum(1 for hex_info in hexagon_board.values() if hex_info['owner'] == 'black')
+    white_score = sum(1 for hex_info in hexagon_board.values() if hex_info['owner'] == 'white')
+
+    print(f"Final Score - Black: {black_score}, White: {white_score}")
+
+    font = pygame.font.SysFont(None, 48)
+    score_text = f"Final Score - Black: {black_score}, White: {white_score}"
+    text_surf = font.render(score_text, True, pygame.Color('white'))
+    screen.blit(text_surf, text_surf.get_rect(center=(WIDTH // 2, HEIGHT // 2)))
+    pygame.display.flip()
 
 def end_current_round():
     """Ends the current round, checking if the conditions for round completion are met."""
-    global current_label, current_turn, turn_ended, current_round, selected_counts, hexagon_board
+    global current_label, current_turn, turn_ended, current_round, selected_counts, hexagon_board, game_over
        
     if current_label is None:
         if current_round != 1:
@@ -325,8 +338,86 @@ def reset_round_state():
     current_round += 1
     pygame.display.flip()
 
+def evaluate_board():
+    """Evaluates the board and returns a score."""
+    # Example evaluation function: Difference in the number of hexes controlled by black and white
+    black_count = sum(1 for hex_info in hexagon_board.values() if hex_info['owner'] == 'black')
+    white_count = sum(1 for hex_info in hexagon_board.values() if hex_info['owner'] == 'white')
+    return black_count - white_count
+
+def minimax(depth, alpha, beta, maximizing_player):
+    """Minimax algorithm with alpha-beta pruning."""
+    if depth == 0 or check_all_hexes_selected():
+        return evaluate_board(), None
+    
+    best_move = None
+    if maximizing_player:
+        max_eval = float('-inf')
+        for move in get_all_possible_moves('black'):
+            make_move(move, 'black')
+            eval, _ = minimax(depth - 1, alpha, beta, False)
+            undo_move(move)
+            if eval > max_eval:
+                max_eval = eval
+                best_move = move
+            alpha = max(alpha, eval)
+            if beta <= alpha:
+                break
+        return max_eval, best_move
+    else:
+        min_eval = float('inf')
+        for move in get_all_possible_moves('white'):
+            make_move(move, 'white')
+            eval, _ = minimax(depth - 1, alpha, beta, True)
+            undo_move(move)
+            if eval < min_eval:
+                min_eval = eval
+                best_move = move
+            beta = min(beta, eval)
+            if beta <= alpha:
+                break
+        return min_eval, best_move
+
+def get_all_possible_moves(player_color):
+    """Get all possible moves for a given player color."""
+    possible_moves = []
+    for pos, hex_info in hexagon_board.items():
+        if not hex_info['selected'] and not hex_info['booked']:
+            possible_moves.append((pos, hex_info))
+    return possible_moves
+
+def make_move(move, player_color):
+    """Make a move on the board."""
+    pos, hex_info = move
+    hex_info['selected'] = True
+    hex_info['booked'] = True
+    hex_info['owner'] = player_color
+    fill_color = BLACK if player_color == 'black' else WHITE
+    draw_hexagon(screen, hex_info['x'], hex_info['y'], HEX_SIZE, (128, 128, 128), fill_color, hex_info['label'])
+    pygame.display.flip()
+
+def undo_move(move):
+    """Undo a move on the board."""
+    pos, hex_info = move
+    hex_info['selected'] = False
+    hex_info['booked'] = False
+    hex_info['owner'] = None
+    draw_hexagon(screen, hex_info['x'], hex_info['y'], HEX_SIZE, (255, 255, 255), (255, 228, 205), hex_info['label'])
+    pygame.display.flip()
+
+def select_hexes_by_minimax():
+    """Select hexes using Minimax algorithm."""
+    depth = 4  # Set the search depth for Minimax
+    _, best_move = minimax(depth, float('-inf'), float('inf'), current_turn == 'black')
+    if best_move:
+        return [best_move]
+    return []
+
 def select_hexes_by_random(hexes_by_label, current_round):
     """Selects hexes randomly based on the current round and label availability."""
+    if current_round == 1:
+        return select_hexes_by_minimax()
+    
     selected_hexes = []
     if current_round == 1:
         # Special handling for the first round: only select one hexagon labeled as 2.
@@ -355,7 +446,6 @@ def select_hexes_by_random(hexes_by_label, current_round):
         print(current_round)
     return selected_hexes
 
-    
 def check_timeout_and_autocomplete():
     """Checks for turn timeout and auto-completes selection if necessary."""
     global start_time
@@ -366,7 +456,7 @@ def check_timeout_and_autocomplete():
             auto_select_remaining_hexes(current_label, required_selections)
             end_current_round()
             start_time = pygame.time.get_ticks()  # 重置起始時間    
- 
+
 def main(black_player, white_player):
     # Your existing implementation of the game logic here
     print(f"Player 1: {black_player}, Player 2: {white_player}")
@@ -374,7 +464,7 @@ def main(black_player, white_player):
     """Main game loop."""
     global selected_counts, current_label, current_turn, turn_ended, current_round, \
            start_time, required_selections, black_player_type, white_player_type, remaining_hexes, \
-           hexagon_board, running  
+           hexagon_board, running, game_over  
     start_time = pygame.time.get_ticks()  # 記錄起始時間
     running = True
     current_round = 1
@@ -399,7 +489,6 @@ def main(black_player, white_player):
     KEEP_ALIVE_EVENT = pygame.USEREVENT + 1
     # Set up a timer to trigger a custom event every 1 second
     pygame.time.set_timer(KEEP_ALIVE_EVENT, 1000)
-    
     
     # Start the main game loop
     while running:
@@ -470,9 +559,10 @@ def main(black_player, white_player):
             
             turn_ended = False
         
-        if display_remaining_hexes():
+        if display_remaining_hexes() and not game_over:
             print("Game Over: All hexes have been selected.")
             draw_player_turn_button(screen, "Game Over")
+            game_over = True  # Set the game over flag
             running = False  # Exit the main loop
             pygame.display.flip()
             clock.tick(30)
@@ -480,14 +570,15 @@ def main(black_player, white_player):
         # Update the display and control the game update rate
         pygame.display.flip()
         clock.tick(30)
-          
-            
-          
-if __name__ == "__main__":
-    if len(sys.argv) != 3:
-        print("Usage: python main.py [player1_type] [player2_type]")
-        print("player1_type and player2_type should be 'human' or 'random'")
-        sys.exit(1)  # Exit the script with an error code
+    
+    # Display the final scores once the game is over
+    display_final_scores()
 
-    main(sys.argv[1], sys.argv[2])
-    # main('random', 'random')
+if __name__ == "__main__":
+    # if len(sys.argv) != 3:
+    #     print("Usage: python main.py [player1_type] [player2_type]")
+    #     print("player1_type and player2_type should be 'human' or 'random'")
+    #     sys.exit(1)  # Exit the script with an error code
+
+    # main(sys.argv[1], sys.argv[2])
+    main('human', 'random')
